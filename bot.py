@@ -358,9 +358,11 @@ async def msg_admin_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════
 # Запуск
 # ═══════════════════════════════════════
-async def main():
-    await init_db()
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+def main():
+    async def post_init(app):
+        await init_db()
+
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(MessageHandler(filters.Regex(r"^⛏️ Майнить$"),     msg_mine))
     app.add_handler(MessageHandler(filters.Regex(r"^💰 Кошелёк$"),     msg_wallet))
@@ -373,7 +375,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(cb_admin, pattern="^adm_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_admin_input))
     print("✅ Бот запущен (polling)")
-    await app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
