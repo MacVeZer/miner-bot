@@ -92,7 +92,13 @@ async def user_get(uid):
             return await c.fetchone()
 
 async def user_reg(uid, name, username, ref_by=None):
-    if await user_get(uid):
+    existing = await user_get(uid)
+    if existing:
+        # Update name/username if changed
+        if existing["name"] != name or existing["username"] != username:
+            async with aiosqlite.connect(DB) as db:
+                await db.execute("UPDATE users SET name=?,username=? WHERE uid=?", (name, username, uid))
+                await db.commit()
         return
     async with aiosqlite.connect(DB) as db:
         # Старт первого фарминга сразу
@@ -236,7 +242,14 @@ def kb_tasks(done_ids, refs, u_balance, u_streak):
         elif not eligible:
             rows.append([InlineKeyboardButton(f"🔒  {name}  (+{reward})", callback_data="noop")])
         else:
-            rows.append([InlineKeyboardButton(f"▶️  {name}  (+{reward})", callback_data=f"task_{tid}")])
+            link = t.get("link")
+            if link:
+                rows.append([
+                    InlineKeyboardButton(f"🔗 {name}", url=link),
+                    InlineKeyboardButton(f"✔ Claim +{reward}", callback_data=f"task_{tid}"),
+                ])
+            else:
+                rows.append([InlineKeyboardButton(f"▶️  {name}  (+{reward})", callback_data=f"task_{tid}")])
     rows.append([InlineKeyboardButton("« Back", callback_data="s_main")])
     return InlineKeyboardMarkup(rows)
 
@@ -288,7 +301,9 @@ def txt_mine(u):
     left  = u["farm_end"] - now
     ready = left <= 0
 
-    streak_bonus = min(u["streak"] * 5, 50)
+    # next_streak = what user will get on claim (accurate preview)
+    next_streak  = u["streak"] + 1 if (now - u["last_streak"]) < 86400 * 1.5 else 1
+    streak_bonus = min(next_streak * 5, 50)
     reward = round(BASE_REWARD * u["boost"] * (1 + streak_bonus / 100), 2)
 
     if ready:
@@ -297,7 +312,7 @@ def txt_mine(u):
             f"✅  <b>Ready to claim!</b>\n\n"
             f"🪙  Reward: <b>{reward:,.2f} {COIN}</b>\n"
             f"⚡  Boost: x{u['boost']:.2f}\n"
-            f"🔥  Streak bonus: +{streak_bonus}% ({u['streak']}d)\n\n"
+            f"🔥  Streak day {next_streak}  (+{streak_bonus}% bonus)\n\n"
             f"Tap <b>Claim Reward</b> ⬇️"
         ), True
     else:
@@ -310,7 +325,7 @@ def txt_mine(u):
             f"[{bar}]  {pct}%\n\n"
             f"🪙  Reward: <b>{reward:,.2f} {COIN}</b>\n"
             f"⚡  Boost: x{u['boost']:.2f}\n"
-            f"🔥  Streak: {u['streak']}d  (+{streak_bonus}%)"
+            f"🔥  Streak: {u['streak']}d  →  day {next_streak} (+{streak_bonus}%)"
         ), False
 
 def txt_boost(u, refs):
@@ -333,29 +348,6 @@ def txt_boost(u, refs):
         f"  🐋 Buy a Whale node\n"
         f"  📋 Complete tasks\n"
         f"  ⛏️ Mine every day (streak)"
-    )
-
-async def txt_wallet(u):
-    async with aiosqlite.connect(DB) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT amount,kind,note,ts FROM txlog WHERE uid=? ORDER BY ts DESC LIMIT 6", (u["uid"],)
-        ) as c:
-            txs = await c.fetchall()
-    lines = []
-    for t in txs:
-        sign = "+" if t["amount"] > 0 else ""
-        d    = __import__("time").strftime("%d.%m %H:%M", __import__("time").localtime(t["ts"]))
-        lines.append(f"  {sign}{t['amount']:.1f}  {t['note']}  <i>({d})</i>")
-    hist = "\n".join(lines) if lines else "  No transactions yet"
-    nd = node_of(u["node"])
-    return (
-        f"💰  <b>Wallet</b>\n\n"
-        f"⭐  Balance: <b>{u['balance']:,.4f} {COIN}</b>\n"
-        f"⚡  Boost: x{u['boost']:.2f}\n"
-        f"⛏️  Total claims: <b>{(await (await aiosqlite.connect(DB)).__aenter__().execute('SELECT COUNT(*) FROM txlog WHERE uid=? AND kind=?', (u['uid'],'farm'))).fetchone()[0] if False else '—'}</b>\n"
-        f"🖥  Node: <b>{nd['name'] if nd else 'None'}</b>\n\n"
-        f"📜  <b>Recent:</b>\n{hist}"
     )
 
 async def txt_wallet2(u):
